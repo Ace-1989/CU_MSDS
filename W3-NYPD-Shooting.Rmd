@@ -1,0 +1,103 @@
+---
+title: "W3-NYPD shooting Project"
+date: '2023-05-21'
+---
+
+## Setup
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(leaflet)
+```
+
+## Importing data
+Data source: The data is from Data.gov. It is a list of every shooting incident that occurred in NYC going back to 2006 through the end of the previous calendar year. This data is manually extracted every quarter and reviewed by the Office of Management Analysis and Planning before being posted on the NYPD website. Each record represents a shooting incident in NYC and includes information about the event, the location and time of occurrence. In addition, information related to suspect and victim demographics is also included. 
+```{r import_NYPD_shooting_data}
+NYPD_Shooting <- read.csv("https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD")
+```
+
+## Tidying and transforming data for visualization 1
+```{r}
+NYPD_Shooting_spatial <- NYPD_Shooting %>%
+  select(BORO, OCCUR_DATE, Longitude, Latitude) # only keep related columns
+NYPD_Shooting_spatial$OCCUR_DATE <- mdy(NYPD_Shooting_spatial$OCCUR_DATE) # change OCCUR_DATE to date object
+NYPD_Shooting_spatial <- NYPD_Shooting_spatial %>%
+  mutate(year = year(OCCUR_DATE)) # add a new column that stores the year 
+  NYPD_Shooting_spatial <- NYPD_Shooting_spatial[NYPD_Shooting_spatial$year == "2022",] # only shooting incidents in 2022 will be visualized
+```
+
+## Visulization 1: spatial distribution of shooting incidents in 2022
+Question: What is the spatial distribution of shooting incidents in 2022? is it consistent with the Borough data?
+```{r}
+map <- leaflet(data = NYPD_Shooting_spatial) %>%
+  addTiles() %>% # set initial view
+  setView(lng = -74.0060, lat = 40.7128, zoom = 10)
+map <- map %>% # add data point
+  addCircleMarkers(lng = ~Longitude,
+                   lat = ~Latitude,
+                   color = "red",
+                   radius = 0.1)
+map # display map
+table(NYPD_Shooting_spatial$BORO) # check if the hotspots are consistent with the data in 2022
+table(NYPD_Shooting$BORO) # check if the hotspots are consistent with the data from 2006-2022
+```
+
+
+## Tidying and transforming data for visualization 2 and 3
+```{r}
+NYPD_Shooting_mod <- select(NYPD_Shooting, OCCUR_DATE, STATISTICAL_MURDER_FLAG) #only keep the columns that I need; NYPD_Shooting_mod means modified data
+NYPD_Shooting_mod$STATISTICAL_MURDER_FLAG <-  ifelse(NYPD_Shooting_mod$STATISTICAL_MURDER_FLAG == "true", 1, 0) #in STATISTICAL_MURDER_FLAG, replace "true" with 1 and replace "false" with 0, so I can add up the number of murders later
+NYPD_Shooting_mod <- mutate(NYPD_Shooting_mod, CASE_FLAG = 1) #add a new column where all the values are 1, which indicates one shooting case
+NYPD_Shooting_mod$OCCUR_DATE <- mdy(NYPD_Shooting_mod$OCCUR_DATE)
+NYPD_Shooting_mod <- NYPD_Shooting_mod %>%
+  mutate(year = year(OCCUR_DATE)) 
+NYPD_Shooting_mod <- group_by(NYPD_Shooting_mod, year) # group by year, and add up all the cases for each year to get the number of cases and number of murders each year
+NYPD_Shooting_mod <- summarize(NYPD_Shooting_mod, murders = sum(STATISTICAL_MURDER_FLAG) , cases = sum(CASE_FLAG))
+```
+
+## Visualization 2: Temporal trend of shooting incidents from 2006 to 2022
+Question: What is the trend of shooting incidents by year?
+```{r}
+ggplot(data = NYPD_Shooting_mod, aes(x = year, y = cases))+
+ geom_col(fill = "lightblue", color = "black")+
+ labs(title = "NYPD Shooting cases by Year", x = "Year", y ="Cases")+
+ theme_minimal()
+mean(NYPD_Shooting_mod$cases) # check the average shooting incidents a year
+```
+
+## Visualization 3:Temporal trend of murders by shooting from 2006 to 2022
+Question: What is the trend of murders resulting from shooting by year?
+```{r}
+ggplot(data = NYPD_Shooting_mod, aes(x = year, y = murders))+
+ geom_col(fill = "red", color = "black")+
+ labs(title = "NYPD murders by shootings by Year", x = "Year", y ="Murders")+
+ theme_minimal()
+```
+
+## Modeling Data
+Question: Is the number of murders cases correlated with shooting cases? Can I predict the number of murder cases by shooting cases number?
+From the graphs, I see that there seems to be a strong correlation between cases and murders. I will use linear regression model to analyze this relationship and predict the number of murders.
+```{r}
+# linear regression model
+NYPD_Model <- lm(murders ~ cases, data = NYPD_Shooting_mod)
+# check the details of the model
+summary(NYPD_Model)
+# add a new column which stores the prediction
+NYPD_murder_pred <- NYPD_Shooting_mod %>% mutate(murder_pred = predict(NYPD_Model))
+# plot the predicted values vs actual values
+NYPD_murder_pred %>% ggplot()+
+  geom_point(aes(x = cases, y = murder_pred), color = "blue")+
+  geom_point(aes(x = cases, y = murders), color = "red")
+```
+
+## Biases
+One potential bias arises from the definition of murder. To address this, I visited the website and reviewed their data notes. According to their annotations, shootings resulting in the victim's death are counted as murders, leading to the STATISTICAL_MURDER_FLAG being marked as true. However, it is reasonable to consider that unintentional discharges resulting in deaths should not be classified as murder. This suggests that the number of murders might be overestimated.
+
+## Conclusions
+In summary, I created visualizations of shooting cases and murders by year and observed a positive correlation between the two. The linear regression model proved effective in predicting the number of murder cases.
+
+## Summary
+In this NYPD shooting analysis project, I first visualized the spatial distribution of shooting incidents in New York City in 2022. I identified two hotspots located in Brooklyn and Bronx, which aligns with the fact that these boroughs have the highest number of shooting incidents. Next, I visualized the temporal trends of shooting incidents and murders resulting from shootings between 2006 and 2022. I observed an average of 1607 shooting incidents and 310 murder cases per year. Interestingly, the years 2017-2019 exhibited a significant decrease in both shooting incidents and murders. To examine the correlation between the number of murder cases and shooting incidents, I employed a linear regression model. The model successfully predicted the number of murder cases based on the total shooting incidents, demonstrating its effectiveness.
+
+
