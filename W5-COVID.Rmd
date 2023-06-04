@@ -1,0 +1,129 @@
+---
+title: "W5-Covid19"
+date: '2023-06-02'
+output: html_document
+---
+
+## Setup
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(leaflet)
+```
+
+## Importing Data 
+Data Source: This data is from COVID-19 Data Repository by the Center for Systems Science and Engineering (CSSE) at Johns Hopkins University. It contains daily time series summary tables, including confirmed, deaths, and recovered. All data is read from the daily case report. Here, I only used the one-time series table for the US-confirmed cases, reported at the county level.
+```{r}
+US_cases <- read.csv("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_US.csv")
+```
+
+## Visualization 1
+Question: As a Floridian, I'm curious about the spatial distribution of COVID cases in Florida at the county level.
+```{r}
+# only select the Florida data
+FL_cases_spatial <- subset(US_cases, Province_State == "Florida")
+
+map <- leaflet(data = FL_cases_spatial) %>%
+  addTiles() %>% # set initial view
+  setView(lng = -81.5158, lat = 27.7663, zoom = 7) # set initial view of Florida
+map <- map %>% # add data point
+  addCircleMarkers(lng = ~Long_,
+                   lat = ~Lat,
+                   color = "red",
+                   # the radius is proportional to the Number of cases in each county
+                   radius = ~ (X3.9.23/30000)) 
+map
+```
+
+From the map, we can see that urban areas generally have more COVID cases, like Miami(Miami-Dade County), Fort Lauderdale(Broward County), Tampa(Hillsborough County), Orlando(Orange County), and Jacksonville(Duval County).
+
+
+## Visulization 2
+Question: To see if the above observation from the map is consistent with the county-level data, I analyzed the number of COVID cases in each county in Florida and visualized the top 10 counties with the most COVID cases as of 3/9/23.
+```{r}
+# only need the Florida data
+FL_cases <- subset(US_cases, Province_State == "Florida")
+# check the which day is the last day of this dataset
+names(FL_cases)[length(names(FL_cases))]
+# only need the county name and the total cases as 3/9/23
+FL_cases <- subset(FL_cases, select = -c(UID:FIPS,Province_State:X3.8.23))
+# sorted the counties based on the COVID case numbers
+sorted_FL_cases <- FL_cases[order(FL_cases$X3.9.23, decreasing = TRUE),]
+# save the top 10 counties in a data frame
+top_10_counties <- head(sorted_FL_cases, 10)
+# plot the top 10 counties
+bar_plot <- ggplot(top_10_counties, aes(x = reorder(Admin2,-X3.9.23) , y = X3.9.23)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(x = "County", y = "COVID Cases", title = "Top 10 Counties with the Most COVID Cases in Florida: 3/9/23") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x-axis labels for better readability
+print(bar_plot)
+```
+
+From this bar plot, we can see that Miami-Dade, Broward, Hillsborough, Orange, and Duval are indeed the counties with the most COVID cases. This confirmed my previous observation from visualization 1.
+
+## Visualization 3
+Question: What are the temporal trends of COVID cases in Florida? And as a Broward County resident, what are the temporal trends of COVID cases in my county?
+```{r}
+# delete unwanted columns and pivor the dataset
+FL_cases_trend <- US_cases %>%
+  subset(Province_State == "Florida") %>%
+  subset(select = -c(UID:FIPS, Province_State:Combined_Key)) %>%
+  pivot_longer(cols= X1.22.20:X3.9.23, names_to = "Date", values_to = "Cases") %>%
+  mutate(Date = as.Date(Date, format = "X%m.%d.%y")) 
+
+# add all florida counties cases together
+FL_cases_trend_total <- aggregate(Cases ~ Date, data = FL_cases_trend, FUN = sum)
+
+# Broward county data
+BW_cases_trend <- subset(FL_cases_trend, Admin2 == "Broward")
+BW_cases_trend <- mutate(BW_cases_trend, FL.cases = FL_cases_trend_total$Cases)
+
+# Create the temporal trends graph of FL total case
+ggplot(BW_cases_trend) +
+  geom_line(aes(x = Date, y =FL.cases), color = "red", size = 1)+
+  labs(x = "Date", y = "COVID Cases", title = "Temporal Trends of COVID Cases: Florida") +
+  theme_minimal()
+
+# Create the temporal trends graph of Broward county case
+ggplot(BW_cases_trend) +
+  geom_line(aes(x = Date, y =Cases), color = "blue", size = 1)+
+  labs(x = "Date", y = "COVID Cases", title = "Temporal Trends of COVID Cases: Broward County") +
+  theme_minimal()
+```
+
+Intuitively, the trend line of Broward County and Florida should exhibit similarity since COVID outbreaks are typically widespread throughout the state. Nonetheless, I am pleasantly surprised by the extent of their resemblance. This raises another question: can the number of cases in Broward be used to estimate the number of cases in Florida?
+
+## Linear Regression: Florida Cases ~ Broward Cases
+To answer the question that if the number of cases in Broward can estimate the number of cases in Florida. I applied linear regression model.
+```{r}
+BW_FL_Model <-lm(FL.cases ~ Cases, data = BW_cases_trend)
+summary(BW_FL_Model)
+
+# add predicted value into the dataframe
+FL_cases_pred <-mutate(BW_cases_trend, FL_cases_pred=predict(BW_FL_Model))
+
+FL_cases_pred %>% ggplot()+
+  # predicted values are blue dots
+  geom_point(aes(x = Cases, y = FL_cases_pred), color = "blue")+
+  # real values are red dots
+  geom_point(aes(x = Cases, y = FL.cases), color = "red")
+
+```
+
+Based on the summary of the linear regression model, it is evident that the R-squared value is 0.9993 and the p-value is less than 2.2e-16. These findings indicate the effectiveness of using Broward cases to estimate the number of cases in Florida. The graph illustrates the predicted values as blue dots and the real values as red dots, showing a remarkable alignment between them. Consequently, it can be concluded that this model is highly effective in its estimation.
+
+## Biases
+There are several potential biases present in this project:
+
+Firstly, when observing the map, it is easy to assume that urban areas are high-risk zones. However, it is important to consider that these urban areas also house larger populations. To address this bias, normalizing the COVID cases by county population is recommended, as it helps eliminate this potential distortion.
+
+Secondly, in the linear regression model, I utilized the COVID cases in Broward to predict the cases in Florida. However, a potential bias arises from Broward County being the second most populous county in Florida. Consequently, the Florida cases are significantly influenced by Broward cases. If a county with a smaller population were chosen, it could lead to entirely different conclusions.
+
+Addressing these biases and considering population normalization are crucial steps in ensuring a more accurate and comprehensive analysis.
+
+## Conclusion
+In this project, I focused on visualizing the spatial distribution of COVID cases in Florida at the county level. By analyzing the data, I identified Miami-Dade, Broward, Palm Beach, Hillsborough, and Orange counties as the top five regions with the highest number of COVID cases as of 3/9/23. Additionally, through the implementation of a successful linear regression model, I was able to accurately predict the number of COVID cases in Florida based on the corresponding figures in Broward County.
+
+
